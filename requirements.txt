@@ -1,0 +1,44 @@
+# DINOv3 Classification Framework Requirements
+# Python >= 3.11
+
+# ============================================
+# Core Deep Learning
+# ============================================
+torch>=2.0.0
+torchvision>=0.15.0
+torchmetrics>=1.0.0
+
+# ============================================
+# DINOv3 Dependencies
+# ============================================
+ftfy
+iopath
+omegaconf
+regex
+submitit
+termcolor
+
+# ============================================
+# Data Processing & Scientific Computing
+# ============================================
+numpy
+pandas
+pillow
+scikit-learn
+scikit-learn-intelex
+
+# ============================================
+# Visualization
+# ============================================
+matplotlib
+seaborn
+tqdm
+
+# ============================================
+# Development Tools (optional)
+# ============================================
+# Uncomment if needed for development
+# docstr-coverage==2.3.2
+# mypy[reports]==1.17
+# pylint==3.3.8
+# ruff==0.12.8

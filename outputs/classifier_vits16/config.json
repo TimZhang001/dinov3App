@@ -1,0 +1,15 @@
+{
+  "data_dir": "dataset/classification/abnormal26/abnormal_dataset",
+  "weights": "pretrained/dinov3_vits16_pretrain_lvd1689m-08c60483.pth",
+  "model_type": "vits16",
+  "output_dir": "outputs/classifier_vits16",
+  "batch_size": 64,
+  "lr": 0.001,
+  "epochs": 100,
+  "resize": 256,
+  "num_workers": 8,
+  "device": "cuda",
+  "seed": 42,
+  "unfreeze_backbone": false,
+  "resume": null
+}
