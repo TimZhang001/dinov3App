@@ -14,13 +14,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="DINOv3 Classification Training")
 
     # Data
-    parser.add_argument("--data-dir", type=str, required=True,
+    parser.add_argument("--data-dir", type=str, default="dataset/classification/abnormal26/abnormal_dataset",
                         help="Path to dataset directory")
     parser.add_argument("--output-dir", type=str, default="outputs/classifier",
                         help="Output directory for checkpoints and logs")
 
     # Model
-    parser.add_argument("--model-type", type=str, default="vits16",
+    parser.add_argument("--model-type", type=str, default="convnext_tiny",
                         choices=["vits16", "vits16plus", "vitb16",
                                 "convnext_tiny", "convnext_small",
                                 "convnext_base", "convnext_large"],
@@ -50,7 +50,7 @@ def parse_args():
     # System
     parser.add_argument("--device", type=str, default="cuda",
                         help="Device to use")
-    parser.add_argument("--num-workers", type=int, default=4,
+    parser.add_argument("--num-workers", type=int, default=0,
                         help="Number of data loading workers")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
