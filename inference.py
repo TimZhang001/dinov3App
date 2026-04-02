@@ -7,7 +7,7 @@ import argparse
 import json
 
 from dinov3_classifier.config import PRETRAINED_WEIGHTS
-from dinov3_classifier.predictor import Predictor
+from dinov3_classifier.predictor import ClassifierPredictor
 
 
 def parse_args():
@@ -52,7 +52,7 @@ def main():
         print(f"Auto-selected weights for {model_type}: {weights_path}")
 
     # Create predictor
-    predictor = Predictor(
+    predictor = ClassifierPredictor(
         checkpoint_path=args.checkpoint,
         weights_path=weights_path,
         device=args.device,

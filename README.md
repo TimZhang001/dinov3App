@@ -105,7 +105,7 @@ dataset/
 ### 训练
 
 ```bash
-# 基础训练（线性探测）
+# 基础训练（线性探测，冻结骨干网络）
 python train.py \
     --data-dir dataset/classification/abnormal26/abnormal_dataset \
     --model-type vits16 \
@@ -113,7 +113,21 @@ python train.py \
     --epochs 100 \
     --lr 0.001
 
-# 微调训练（解冻骨干网络）
+# 带隐藏层的分类头
+python train.py \
+    --data-dir dataset/classification/abnormal26/abnormal_dataset \
+    --model-type vits16 \
+    --hidden-dim 256 \
+    --batch-size 64
+
+# 部分微调（解冻最后2层）
+python train.py \
+    --data-dir dataset/classification/abnormal26/abnormal_dataset \
+    --model-type convnext_base \
+    --unfreeze-layers 2 \
+    --lr 0.0001
+
+# 完全微调（解冻全部骨干网络）
 python train.py \
     --data-dir dataset/classification/abnormal26/abnormal_dataset \
     --model-type convnext_base \
@@ -136,8 +150,33 @@ python train.py \
 | `--lr` | 0.001 | 学习率 |
 | `--epochs` | 100 | 训练轮数 |
 | `--resize` | 256 | 图像尺寸 |
-| `--unfreeze-backbone` | False | 解冻骨干网络 |
+| `--hidden-dim` | 0 | 分类头隐藏层维度（0表示无隐藏层） |
+| `--unfreeze-layers` | 0 | 解冻骨干网络最后N层（0=全冻结，-1=全解冻） |
+| `--unfreeze-backbone` | False | 完全解冻骨干网络（等同于 --unfreeze-layers -1） |
 | `--resume` | None | 恢复训练的检查点路径 |
+
+### 分类头结构
+
+默认（`--hidden-dim 0`）：
+```
+LayerNorm -> Linear(feature_dim, num_classes)
+```
+
+带隐藏层（`--hidden-dim 256`）：
+```
+LayerNorm -> Linear(feature_dim, hidden_dim) -> GELU -> Linear(hidden_dim, num_classes)
+```
+
+### 骨干网络冻结策略
+
+| 参数设置 | 行为 |
+|----------|------|
+| 默认 | 骨干网络完全冻结，仅训练分类头 |
+| `--unfreeze-layers 2` | 解冻最后2层，其余冻结 |
+| `--unfreeze-layers -1` 或 `--unfreeze-backbone` | 骨干网络完全解冻 |
+
+**ViT 模型**：`unfreeze-layers N` 解冻最后 N 个 transformer blocks
+**ConvNeXt 模型**：`unfreeze-layers N` 解冻最后 N 个 stages（共4个stages）
 
 ### 评估
 

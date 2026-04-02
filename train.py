@@ -28,8 +28,12 @@ def parse_args():
                         help="Model architecture type")
     parser.add_argument("--weights", type=str, default=None,
                         help="Path to pretrained weights (default: auto-select)")
+    parser.add_argument("--hidden-dim", type=int, default=0,
+                        help="Hidden layer dimension in classifier (0 = no hidden layer)")
+    parser.add_argument("--unfreeze-layers", type=int, default=0,
+                        help="Number of last backbone layers to unfreeze (0 = freeze all, -1 = unfreeze all)")
     parser.add_argument("--unfreeze-backbone", action="store_true",
-                        help="Unfreeze backbone for fine-tuning")
+                        help="Fully unfreeze backbone (equivalent to --unfreeze-layers -1)")
 
     # Training
     parser.add_argument("--batch-size", type=int, default=256,
@@ -97,13 +101,26 @@ def main():
         data_dir=args.data_dir,
     )
 
+    # Handle unfreeze logic
+    unfreeze_layers = args.unfreeze_layers
+    freeze_backbone = True
+    if args.unfreeze_backbone:
+        unfreeze_layers = -1
+        freeze_backbone = False
+    elif unfreeze_layers == -1:
+        freeze_backbone = False
+    elif unfreeze_layers > 0:
+        freeze_backbone = False
+
     # Create config with timestamp
     config = Config(
         data_dir=args.data_dir,
         weights_path=weights_path,
         output_dir=output_dir,
         model_type=args.model_type,
-        freeze_backbone=not args.unfreeze_backbone,
+        freeze_backbone=freeze_backbone,
+        hidden_dim=args.hidden_dim,
+        unfreeze_layers=unfreeze_layers,
         batch_size=args.batch_size,
         learning_rate=args.lr,
         epochs=args.epochs,

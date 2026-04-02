@@ -1,6 +1,8 @@
 """Evaluation pipeline for DINOv3 classifier."""
 
+import datetime
 import json
+import urllib.parse
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -8,7 +10,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
-import torch.nn as nn
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -20,9 +21,173 @@ from sklearn.metrics import (
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .config import Config
 from .data import ClassificationDataset
 from .model import DINOv3Classifier
+
+
+class ResultManager:
+    """管理验证结果的类，负责存储和处理路径、置信度等信息"""
+
+    def __init__(self):
+        self.results = []
+        self.mistake_dict = {}
+
+    def add_batch_result(self, paths: list, pred_prob: torch.Tensor) -> None:
+        """添加批次结果
+
+        Args:
+            paths: 图像路径列表
+            pred_prob: 预测概率张量，形状为 (batch_size, num_classes)
+        """
+        if pred_prob is None:
+            return
+
+        # 获取每个样本的预测置信度（最大概率值）
+        confidences = torch.max(pred_prob, dim=1).values.cpu().numpy()
+
+        # 存储路径和置信度信息
+        for i, path in enumerate(paths):
+            self.results.append({
+                'path': path,
+                'confidence': float(confidences[i])
+            })
+
+    def analyze_mistakes(self, targets: torch.Tensor, predictions: torch.Tensor,
+                         class_names: List[str]) -> None:
+        """分析错误分类样本
+
+        Args:
+            targets: 真实标签
+            predictions: 预测结果
+            class_names: 类别名称列表
+        """
+        # 初始化错误字典
+        if not self.mistake_dict:
+            for name in class_names:
+                self.mistake_dict[name] = []
+
+        # 处理每个样本的预测结果
+        for i, (target, pred) in enumerate(zip(targets, predictions)):
+            target_cls = class_names[int(target)]
+            pred_cls = class_names[int(pred)]
+
+            # 获取对应的路径和置信度信息
+            if i < len(self.results):
+                result_info = self.results[i]
+                path = result_info['path']
+                confidence = result_info['confidence']
+            else:
+                path = "unknown"
+                confidence = 0.0
+
+            if target_cls != pred_cls:
+                # 存储错误样本的路径和置信度信息
+                self.mistake_dict[pred_cls].append({
+                    'path': path,
+                    'confidence': confidence
+                })
+
+    def clear_results(self) -> None:
+        """清空结果数据"""
+        self.results.clear()
+
+    def get_mistake_count(self) -> int:
+        """获取错误样本总数"""
+        return sum(len(results) for results in self.mistake_dict.values())
+
+    def get_mistake_dict(self) -> dict:
+        """获取错误字典"""
+        return self.mistake_dict.copy()
+
+
+class MistakeAnalyzer:
+    """错误分析器，负责生成错误分析报告"""
+
+    def __init__(self, result_manager: ResultManager):
+        self.result_manager = result_manager
+
+    @staticmethod
+    def create_vscode_link(path: str) -> str:
+        """创建VSCode可点击的链接"""
+        encoded_path = urllib.parse.quote(path)
+        return f"file:{encoded_path}"
+
+    @staticmethod
+    def create_markdown_link(path: str) -> str:
+        """创建Markdown格式的超链接"""
+        filename = Path(path).name
+        return f"[{filename}]({MistakeAnalyzer.create_vscode_link(path)})"
+
+    def save_mistakes_to_md(self, model_name: str, base_name: str, split: str,
+                            save_dir: Path) -> str:
+        """保存错误分析报告到Markdown文件
+
+        Args:
+            model_name: 模型名称
+            base_name: 基础名称
+            split: 数据集划分
+            save_dir: 保存目录
+
+        Returns:
+            保存的文件路径
+        """
+        mistake_dict = self.result_manager.get_mistake_dict()
+        total_mistakes = self.result_manager.get_mistake_count()
+
+        # 创建保存目录
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # 生成文件名
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"mistakes_{split}_{timestamp}.md"
+        filepath = save_dir / filename
+
+        # 写入markdown文件
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"# 分类错误分析报告\n\n")
+            f.write(f"**模型**: {model_name}\n\n")
+            f.write(f"**数据集**: {base_name}\n\n")
+            f.write(f"**划分**: {split}\n\n")
+            f.write(f"**生成时间**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write(f"**总错误样本数**: {total_mistakes}\n\n")
+
+            # 错误统计概览
+            f.write("## 错误统计概览\n\n")
+            f.write("| 预测类别 | 错误数量 | 占比 |\n")
+            f.write("|----------|----------|------|\n")
+
+            for pred_class, results in mistake_dict.items():
+                if results:  # 只显示有错误的类别
+                    percentage = (len(results) / total_mistakes * 100) if total_mistakes > 0 else 0
+                    f.write(f"| {pred_class:<10} | {len(results):<8} | {percentage:>5.2f}% |\n")
+
+            f.write("\n## 详细错误样本\n\n")
+            f.write("> **提示**: 点击文件名可以在VSCode中打开图像文件\n\n")
+
+            # 详细错误样本
+            for pred_class, results in mistake_dict.items():
+                if results:  # 只显示有错误的类别
+                    f.write(f"### 预测为 {pred_class} 的错误样本（共 {len(results)} 个）\n\n")
+
+                    # 按置信度降序排序，方便查看高置信度错误
+                    sorted_results = sorted(results, key=lambda x: x['confidence'], reverse=True)
+
+                    f.write("| 序号 | 文件名 | 置信度 |\n")
+                    f.write("|------|--------|--------|\n")
+
+                    for i, result in enumerate(sorted_results, 1):
+                        path = result['path']
+                        confidence = result['confidence']
+
+                        # 获取文件名和创建超链接
+                        md_link = self.create_markdown_link(path)
+
+                        f.write(f"| {i:<4} | {md_link} | {confidence:>7.4f} |\n")
+
+                    f.write("\n")
+
+        print(f"错误分析报告已保存到: {filepath}")
+        return str(filepath)
 
 
 class ClassifierEvaluator:
@@ -51,6 +216,11 @@ class ClassifierEvaluator:
 
         self.model: Optional[DINOv3Classifier] = None
         self.class_names: List[str] = []
+        self.model_type: str = "unknown"
+
+        # 错误分析相关
+        self.result_manager = ResultManager()
+        self.mistake_analyzer = MistakeAnalyzer(self.result_manager)
 
     def load_model(self):
         """Load model from checkpoint."""
@@ -61,6 +231,7 @@ class ClassifierEvaluator:
         )
         self.model.eval()
         self.class_names = getattr(self.model, "class_names", [])
+        self.model_type = getattr(self.model, "model_type", "unknown")
         print(f"Loaded model with {len(self.class_names)} classes")
 
     def evaluate(self, dataloader: DataLoader, split_name: str = "test") -> Dict:
@@ -78,6 +249,10 @@ class ClassifierEvaluator:
         all_preds = []
         all_labels = []
         all_probs = []
+        all_paths = []
+
+        # 清空之前的结果
+        self.result_manager.clear_results()
 
         with torch.no_grad():
             for images, labels in tqdm(dataloader, desc=f"Evaluating {split_name}"):
@@ -92,9 +267,28 @@ class ClassifierEvaluator:
                 all_labels.extend(labels.cpu().numpy())
                 all_probs.extend(probs.cpu().numpy())
 
+            # 收集图像路径（从dataloader的dataset中获取）
+            dataset = dataloader.dataset
+            if hasattr(dataset, 'samples'):
+                # ImageFolder stores (path, class_idx) tuples in samples
+                all_paths = [sample[0] for sample in dataset.samples]
+            elif hasattr(dataset, 'paths'):
+                all_paths = dataset.paths
+            else:
+                all_paths = [f"sample_{i}" for i in range(len(dataset))]
+
         all_preds = np.array(all_preds)
         all_labels = np.array(all_labels)
         all_probs = np.array(all_probs)
+
+        # 添加批次结果到result_manager
+        probs_tensor = torch.tensor(all_probs)
+        self.result_manager.add_batch_result(all_paths, probs_tensor)
+
+        # 分析错误样本
+        targets_tensor = torch.tensor(all_labels)
+        preds_tensor = torch.tensor(all_preds)
+        self.result_manager.analyze_mistakes(targets_tensor, preds_tensor, self.class_names)
 
         # Calculate metrics
         results = self._compute_metrics(all_labels, all_preds, all_probs)
@@ -272,6 +466,19 @@ class ClassifierEvaluator:
         cm = np.array(results["confusion_matrix"])
         self.plot_confusion_matrix(cm)
         self.plot_per_class_metrics(report)
+
+        # Save mistake analysis report
+        total_mistakes = self.result_manager.get_mistake_count()
+        if total_mistakes > 0:
+            dataset_name = Path(data_dir).name
+            self.mistake_analyzer.save_mistakes_to_md(
+                model_name=self.model_type,
+                base_name=dataset_name,
+                split=split,
+                save_dir=self.output_dir,
+            )
+        else:
+            print("No misclassifications found - no mistake report generated")
 
         print(f"\nResults saved to {self.output_dir}")
 

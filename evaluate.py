@@ -6,7 +6,7 @@ Evaluation script for trained DINOv3 classifier.
 import argparse
 
 from dinov3_classifier.config import PRETRAINED_WEIGHTS
-from dinov3_classifier.evaluator import Evaluator
+from dinov3_classifier.evaluator import ClassifierEvaluator
 
 
 def parse_args():
@@ -46,7 +46,7 @@ def main():
         print(f"Auto-selected weights for {model_type}: {weights_path}")
 
     # Evaluate
-    evaluator = Evaluator(
+    evaluator = ClassifierEvaluator(
         checkpoint_path=args.checkpoint,
         weights_path=weights_path,
         output_dir=args.output_dir,

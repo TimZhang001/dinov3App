@@ -96,6 +96,8 @@ class ClassifierTrainer:
             weights_path=self.config.weights_path,
             num_classes=self.config.num_classes,
             freeze_backbone=self.config.freeze_backbone,
+            hidden_dim=self.config.hidden_dim,
+            unfreeze_layers=self.config.unfreeze_layers,
         )
         self.model = self.model.to(self.device)
 
@@ -110,13 +112,15 @@ class ClassifierTrainer:
     def _setup_optimization(self):
         """Initialize optimizer and scheduler."""
         # Different learning rates for backbone vs head
-        if not self.config.freeze_backbone:
+        # Case 1: Fully frozen backbone - only train classifier
+        if self.config.freeze_backbone and self.config.unfreeze_layers == 0:
+            params = self.model.classifier.parameters()
+        # Case 2: Partial unfreeze or full unfreeze - train both backbone and classifier
+        else:
             params = [
                 {"params": self.model.backbone.parameters(), "lr": self.config.learning_rate * 0.1},
                 {"params": self.model.classifier.parameters(), "lr": self.config.learning_rate},
             ]
-        else:
-            params = self.model.classifier.parameters()
 
         self.optimizer = optim.AdamW(
             params,
@@ -245,6 +249,8 @@ class ClassifierTrainer:
             "num_classes": self.config.num_classes,
             "model_type": self.config.model_type,
             "freeze_backbone": self.config.freeze_backbone,
+            "hidden_dim": self.config.hidden_dim,
+            "unfreeze_layers": self.config.unfreeze_layers,
             "class_names": self.config.class_names,
         }
 

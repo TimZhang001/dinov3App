@@ -20,6 +20,8 @@ class Config:
     model_type: str = "vits16"  # vits16, vits16plus, vitb16
     num_classes: int = 0
     freeze_backbone: bool = True
+    hidden_dim: int = 0  # Hidden layer dimension in classifier (0 = no hidden layer)
+    unfreeze_layers: int = 0  # Number of last backbone layers to unfreeze (0 = freeze all, -1 = unfreeze all)
 
     # Training settings
     batch_size: int = 32
