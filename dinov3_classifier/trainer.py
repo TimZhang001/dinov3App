@@ -8,7 +8,6 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -35,7 +34,6 @@ class ClassifierTrainer:
         self.optimizer: Optional[optim.Optimizer] = None
         self.scheduler: Optional[optim.lr_scheduler._LRScheduler] = None
         self.criterion: Optional[nn.Module] = None
-        self.scaler: Optional[GradScaler] = None
         self.writer: Optional[SummaryWriter] = None
 
         # State
@@ -148,9 +146,6 @@ class ClassifierTrainer:
         self.criterion = nn.CrossEntropyLoss()
 
     def _setup_misc(self):
-        """Initialize mixed precision and other utilities."""
-        self.scaler = GradScaler() if self.config.use_amp and self.device.type == "cuda" else None
-
         # Set random seed
         torch.manual_seed(self.config.seed)
         if torch.cuda.is_available():
@@ -184,19 +179,10 @@ class ClassifierTrainer:
             self.optimizer.zero_grad()
 
             # Forward pass with mixed precision
-            if self.scaler is not None:
-                with autocast():
-                    logits = self.model(images)
-                    loss = self.criterion(logits, labels)
-
-                self.scaler.scale(loss).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                logits = self.model(images)
-                loss = self.criterion(logits, labels)
-                loss.backward()
-                self.optimizer.step()
+            logits = self.model(images)
+            loss = self.criterion(logits, labels)
+            loss.backward()
+            self.optimizer.step()
 
             # Statistics
             total_loss += loss.item() * images.size(0)

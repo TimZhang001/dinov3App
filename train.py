@@ -55,8 +55,6 @@ def parse_args():
                         help="Number of data loading workers")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
-    parser.add_argument("--no-amp", action="store_true",
-                        help="Disable automatic mixed precision")
 
     # Checkpoint
     parser.add_argument("--resume", type=str, default=None,
@@ -115,7 +113,6 @@ def main():
         device=args.device,
         num_workers=args.num_workers,
         seed=args.seed,
-        use_amp=not args.no_amp,
         resume=args.resume,
         save_every=args.save_every,
     )

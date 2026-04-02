@@ -36,7 +36,6 @@ class Config:
     # System
     device: str = "cuda"
     seed: int = 42
-    use_amp: bool = True
 
     # Checkpoint
     resume: Optional[str] = None
