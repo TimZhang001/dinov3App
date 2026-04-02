@@ -4,6 +4,7 @@ Main training script for DINOv3 classification.
 """
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 
 from dinov3_classifier import Config
@@ -14,10 +15,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="DINOv3 Classification Training")
 
     # Data
-    parser.add_argument("--data-dir", type=str, default="dataset/classification/abnormal26/abnormal_dataset",
+    parser.add_argument("--data-dir", type=str, default="dataset/classification/phone26/phone_dataset",
                         help="Path to dataset directory")
     parser.add_argument("--output-dir", type=str, default="outputs/classifier",
-                        help="Output directory for checkpoints and logs")
+                        help="Base output directory for checkpoints and logs")
 
     # Model
     parser.add_argument("--model-type", type=str, default="convnext_tiny",
@@ -31,13 +32,13 @@ def parse_args():
                         help="Unfreeze backbone for fine-tuning")
 
     # Training
-    parser.add_argument("--batch-size", type=int, default=32,
+    parser.add_argument("--batch-size", type=int, default=256,
                         help="Batch size for training")
-    parser.add_argument("--lr", type=float, default=0.001,
+    parser.add_argument("--lr", type=float, default=0.0001,
                         help="Learning rate")
     parser.add_argument("--epochs", type=int, default=100,
                         help="Number of training epochs")
-    parser.add_argument("--resize", type=int, default=256,
+    parser.add_argument("--resize", type=int, default=192,
                         help="Image resize size")
 
     # Optimization
@@ -50,7 +51,7 @@ def parse_args():
     # System
     parser.add_argument("--device", type=str, default="cuda",
                         help="Device to use")
-    parser.add_argument("--num-workers", type=int, default=0,
+    parser.add_argument("--num-workers", type=int, default=8,
                         help="Number of data loading workers")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
@@ -66,6 +67,20 @@ def parse_args():
     return parser.parse_args()
 
 
+def generate_output_dir(base_dir: str, model_type: str, data_dir: str) -> str:
+    """Generate unique output directory based on model, dataset and timestamp."""
+    # Extract dataset name from path
+    dataset_name = Path(data_dir).name
+
+    # Generate timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Create directory name: model_dataset_timestamp
+    dir_name = f"{model_type}_{dataset_name}_{timestamp}"
+
+    return str(Path(base_dir) / dir_name)
+
+
 def main():
     args = parse_args()
 
@@ -77,11 +92,18 @@ def main():
         if weights_path is None:
             raise ValueError(f"No default weights for model type: {args.model_type}")
 
-    # Create config
+    # Generate unique output directory
+    output_dir = generate_output_dir(
+        base_dir=args.output_dir,
+        model_type=args.model_type,
+        data_dir=args.data_dir,
+    )
+
+    # Create config with timestamp
     config = Config(
         data_dir=args.data_dir,
         weights_path=weights_path,
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         model_type=args.model_type,
         freeze_backbone=not args.unfreeze_backbone,
         batch_size=args.batch_size,

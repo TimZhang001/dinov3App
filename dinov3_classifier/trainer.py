@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from .config import Config
@@ -35,6 +36,7 @@ class ClassifierTrainer:
         self.scheduler: Optional[optim.lr_scheduler._LRScheduler] = None
         self.criterion: Optional[nn.Module] = None
         self.scaler: Optional[GradScaler] = None
+        self.writer: Optional[SummaryWriter] = None
 
         # State
         self.current_epoch = 0
@@ -65,6 +67,14 @@ class ClassifierTrainer:
         self.checkpoint_dir = self.output_dir / "checkpoints"
         self.checkpoint_dir.mkdir(exist_ok=True)
 
+        # Setup TensorBoard
+        self.log_dir = self.output_dir / "logs"
+        self.log_dir.mkdir(exist_ok=True)
+        self.writer = SummaryWriter(log_dir=str(self.log_dir))
+
+        # Save config immediately after creating directories
+        self.config.save(self.output_dir / "config.json")
+
     def _setup_dataset(self):
         """Initialize dataset and dataloaders."""
         self.dataset = ClassificationDataset(
@@ -90,6 +100,10 @@ class ClassifierTrainer:
             freeze_backbone=self.config.freeze_backbone,
         )
         self.model = self.model.to(self.device)
+
+        # Compile model for faster inference (PyTorch 2.0+)
+        if hasattr(torch, 'compile') and self.device.type == 'cuda':
+            self.model = torch.compile(self.model, mode='reduce-overhead')
 
         # Resume from checkpoint if specified
         if self.config.resume:
@@ -160,9 +174,10 @@ class ClassifierTrainer:
         total_loss = 0.0
         correct = 0
         total = 0
+        global_step = self.current_epoch * len(self.train_loader)
 
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}")
-        for images, labels in pbar:
+        for batch_idx, (images, labels) in enumerate(pbar):
             images = images.to(self.device)
             labels = labels.to(self.device)
 
@@ -188,6 +203,12 @@ class ClassifierTrainer:
             _, predicted = logits.max(1)
             correct += predicted.eq(labels).sum().item()
             total += labels.size(0)
+
+            # Log to TensorBoard every 10 batches
+            if self.writer and batch_idx % 10 == 0:
+                step = global_step + batch_idx
+                self.writer.add_scalar("train/batch_loss", loss.item(), step)
+                self.writer.add_scalar("train/batch_acc", correct / total, step)
 
             pbar.set_postfix(
                 loss=f"{loss.item():.4f}",
@@ -281,6 +302,14 @@ class ClassifierTrainer:
             self.history["val_acc"].append(val_acc)
             self.history["lr"].append(self.optimizer.param_groups[0]["lr"])
 
+            # Log to TensorBoard
+            if self.writer:
+                self.writer.add_scalar("epoch/train_loss", train_loss, epoch)
+                self.writer.add_scalar("epoch/train_acc", train_acc, epoch)
+                self.writer.add_scalar("epoch/val_loss", val_loss, epoch)
+                self.writer.add_scalar("epoch/val_acc", val_acc, epoch)
+                self.writer.add_scalar("epoch/learning_rate", self.optimizer.param_groups[0]["lr"], epoch)
+
             # Print epoch summary
             print(f"\nEpoch {epoch + 1}/{self.config.epochs}")
             print(f"  Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
@@ -308,11 +337,17 @@ class ClassifierTrainer:
         with open(self.output_dir / "history.json", "w") as f:
             json.dump(self.history, f, indent=2)
 
+        # Close TensorBoard writer
+        if self.writer:
+            self.writer.close()
+
         elapsed = time.time() - start_time
         print(f"\n{'=' * 50}")
         print("Training Completed!")
         print(f"{'=' * 50}")
         print(f"Total time: {elapsed / 60:.2f} minutes")
         print(f"Best validation accuracy: {self.best_val_acc:.4f}")
+        print(f"\nTensorBoard logs: {self.log_dir}")
+        print(f"Run 'tensorboard --logdir={self.output_dir}' to view training curves")
 
         return self.history

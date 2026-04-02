@@ -1,4 +1,5 @@
 dinov3
 dataset
 pretrained
+outputs
 *.pyc

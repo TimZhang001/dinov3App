@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -41,13 +42,26 @@ class Config:
     resume: Optional[str] = None
     save_every: int = 10
 
-    # Class names (populated during training)
+    # Metadata
+    timestamp: str = ""
     class_names: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        """Convert string paths to proper format and set timestamp."""
+        if self.data_dir:
+            self.data_dir = str(Path(self.data_dir).resolve())
+        if self.weights_path:
+            self.weights_path = str(Path(self.weights_path).resolve())
+        self.output_dir = str(Path(self.output_dir).resolve())
+
+        # Set timestamp if not provided
+        if not self.timestamp:
+            self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def save(self, path: Path):
         """Save config to JSON file."""
         with open(path, "w") as f:
-            json.dump(asdict(self), f, indent=2)
+            json.dump(asdict(self), f, indent=2, ensure_ascii=False)
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -55,14 +69,6 @@ class Config:
         with open(path, "r") as f:
             data = json.load(f)
         return cls(**data)
-
-    def __post_init__(self):
-        """Convert string paths to proper format."""
-        if self.data_dir:
-            self.data_dir = str(Path(self.data_dir).resolve())
-        if self.weights_path:
-            self.weights_path = str(Path(self.weights_path).resolve())
-        self.output_dir = str(Path(self.output_dir).resolve())
 
 
 # Pretrained weights registry

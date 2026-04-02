@@ -48,9 +48,9 @@ class ClassificationDataset:
         if self._train_transform is None:
             self._train_transform = v2.Compose([
                 v2.ToImage(),
-                v2.RandomResizedCrop(self.resize_size, antialias=True),
+                v2.RandomResizedCrop(self.resize_size, scale=(0.8, 1.0), antialias=True),
                 v2.RandomHorizontalFlip(p=0.5),
-                v2.RandAugment(num_ops=2, magnitude=9),
+                v2.RandAugment(num_ops=1, magnitude=9),  # Reduced from 2 to 1 for faster CPU processing
                 v2.ToDtype(torch.float32, scale=True),
                 v2.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ])
@@ -138,7 +138,10 @@ class ClassificationDataset:
             shuffle=shuffle if shuffle else default_shuffle,
             num_workers=self.num_workers,
             pin_memory=torch.cuda.is_available(),
+            pin_memory_device="cuda" if torch.cuda.is_available() else "",
             drop_last=(split == "train"),
+            persistent_workers=self.num_workers > 0,
+            prefetch_factor=4 if self.num_workers > 0 else None,
         )
 
     def get_loaders(self) -> Tuple[DataLoader, DataLoader, DataLoader]:
