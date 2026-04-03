@@ -133,11 +133,11 @@ mypy dinov3/
 
 ## Custom Classification Framework
 
-The `dinov3_classifier/` package provides an object-oriented interface for custom classification tasks:
+The `dinov3_app/` package provides an object-oriented interface for custom classification tasks:
 
 ### Structure
 ```
-dinov3_classifier/
+dinov3_app/
 ├── config.py      # Configuration management
 ├── model.py       # DINOv3Classifier model
 ├── data.py        # ClassificationDataset class

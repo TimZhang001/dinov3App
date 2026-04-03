@@ -1,15 +1,18 @@
-"""Configuration management for DINOv3 classification."""
+"""Configuration management for DINOv3 classification and segmentation."""
 
 import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
 class Config:
-    """Training and inference configuration."""
+    """Training and inference configuration for classification and segmentation tasks."""
+
+    # Task type
+    task: str = "classification"  # "classification" or "segmentation"
 
     # Data paths
     data_dir: str = ""
@@ -17,11 +20,18 @@ class Config:
     output_dir: str = "outputs"
 
     # Model settings
-    model_type: str = "vits16"  # vits16, vits16plus, vitb16
+    model_type: str = "vits16"  # vits16, vits16plus, vitb16, convnext_*
     num_classes: int = 0
     freeze_backbone: bool = True
     hidden_dim: int = 0  # Hidden layer dimension in classifier (0 = no hidden layer)
     unfreeze_layers: int = 0  # Number of last backbone layers to unfreeze (0 = freeze all, -1 = unfreeze all)
+
+    # Segmentation-specific settings
+    use_decoder: bool = True
+    decoder_channels: int = 256
+    loss_type: str = "bce"  # bce, dice, focal
+    pos_weight: float = 1.0
+    face_detector_config: Dict = field(default_factory=dict)
 
     # Training settings
     batch_size: int = 32
@@ -34,6 +44,11 @@ class Config:
     weight_decay: float = 0.05
     lr_scheduler: str = "cosine"  # cosine, step, exponential
     warmup_epochs: int = 5
+    grad_clip: float = 1.0  # Gradient clipping (0 = disabled)
+
+    # Logging
+    print_freq: int = 10
+    save_freq: int = 10
 
     # System
     device: str = "cuda"

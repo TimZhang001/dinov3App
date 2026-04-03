@@ -1,15 +1,18 @@
-"""Evaluation pipeline for DINOv3 classifier."""
+"""Evaluation pipeline for DINOv3 classifier and segmentation."""
 
 import datetime
 import json
 import urllib.parse
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+import cv2
+from PIL import Image
 
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
+import torch.nn as nn
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -19,10 +22,12 @@ from sklearn.metrics import (
     recall_score,
 )
 from torch.utils.data import DataLoader
+from torchvision.transforms import v2
 from tqdm import tqdm
 
-from .data import ClassificationDataset
-from .model import DINOv3Classifier
+from .data import ClassificationDataset, SegmentationDataset
+from .model import DINOv3Classifier, DINOv3Segmentation
+from .config import Config
 
 
 class ResultManager:
@@ -176,11 +181,14 @@ class MistakeAnalyzer:
                     f.write("|------|--------|--------|\n")
 
                     for i, result in enumerate(sorted_results, 1):
-                        path = result['path']
+                        path       = result['path']
                         confidence = result['confidence']
 
+                        # path转化为绝对路径，确保链接正确
+                        abs_path = str(Path(path).resolve())
+
                         # 获取文件名和创建超链接
-                        md_link = self.create_markdown_link(path)
+                        md_link = self.create_markdown_link(abs_path)
 
                         f.write(f"| {i:<4} | {md_link} | {confidence:>7.4f} |\n")
 
@@ -333,6 +341,7 @@ class ClassifierEvaluator:
     def plot_confusion_matrix(
         self,
         cm: np.ndarray,
+        accuracy: float = None,
         save_path: Optional[str] = None,
         figsize: tuple = (12, 10),
     ):
@@ -348,7 +357,10 @@ class ClassifierEvaluator:
         )
         plt.xlabel("Predicted")
         plt.ylabel("True")
-        plt.title("Confusion Matrix")
+        if accuracy is not None:
+            plt.title(f"Confusion Matrix (Top1 Acc: {accuracy:.2%})")
+        else:
+            plt.title("Confusion Matrix")
         plt.tight_layout()
 
         save_path = save_path or str(self.output_dir / "confusion_matrix.png")
@@ -464,7 +476,7 @@ class ClassifierEvaluator:
 
         # Plot visualizations
         cm = np.array(results["confusion_matrix"])
-        self.plot_confusion_matrix(cm)
+        self.plot_confusion_matrix(cm, accuracy=results["accuracy"])
         self.plot_per_class_metrics(report)
 
         # Save mistake analysis report
@@ -483,3 +495,405 @@ class ClassifierEvaluator:
         print(f"\nResults saved to {self.output_dir}")
 
         return results
+
+
+class SegmentationEvaluator:
+    """DINOv3分割评估器类"""
+
+    def __init__(self, checkpoint_path: str, weights_path: str = None, device: str = 'auto'):
+        """
+        初始化评估器
+
+        Args:
+            checkpoint_path: 模型检查点路径
+            weights_path: DINOv3权重路径
+            device: 计算设备
+        """
+        self.checkpoint_path = Path(checkpoint_path)
+        self.weights_path = weights_path
+
+        # 设置设备
+        if device == 'auto':
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = torch.device(device)
+
+        # 加载模型
+        self.model = self._load_model()
+        self.model.to(self.device)
+        self.model.eval()
+
+        # 评估指标
+        self.metrics = {}
+
+    def _load_model(self) -> DINOv3Segmentation:
+        """加载训练好的模型"""
+        if not self.checkpoint_path.exists():
+            raise FileNotFoundError(f"检查点文件不存在: {self.checkpoint_path}")
+
+        # 加载检查点
+        checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+        config_dict = checkpoint['config']
+
+        # 从检查点恢复配置
+        config = Config()
+        config.__dict__.update(config_dict)
+
+        # 创建模型
+        model = DINOv3Segmentation(
+            model_type=config.model_type,
+            weights_path=self.weights_path,
+            freeze_backbone=False,  # 评估时不需要冻结
+            use_decoder=config.use_decoder,
+            decoder_channels=config.decoder_channels
+        )
+
+        # 加载模型权重
+        model.load_state_dict(checkpoint['model_state_dict'])
+
+        print(f"成功加载模型: {self.checkpoint_path}")
+        return model
+
+    def _compute_metrics(self, pred: torch.Tensor, target: torch.Tensor) -> Dict[str, float]:
+        """
+        计算分割指标
+
+        Args:
+            pred: 预测mask (B, 1, H, W)
+            target: 真实mask (B, 1, H, W)
+
+        Returns:
+            指标字典
+        """
+        # 转换为numpy数组
+        pred_np = torch.sigmoid(pred).cpu().numpy()
+        target_np = target.cpu().numpy()
+
+        # 二值化预测结果
+        pred_binary = (pred_np > 0.5).astype(np.float32)
+
+        # 计算各种指标
+        metrics = {}
+
+        # 计算每个样本的指标
+        batch_size = pred_np.shape[0]
+        dice_scores = []
+        iou_scores = []
+        precision_scores = []
+        recall_scores = []
+        f1_scores = []
+
+        for i in range(batch_size):
+            pred_i = pred_binary[i, 0].flatten()
+            target_i = target_np[i, 0].flatten()
+
+            # 计算混淆矩阵
+            tn, fp, fn, tp = confusion_matrix(target_i, pred_i, labels=[0, 1]).ravel()
+
+            # Dice系数
+            dice = (2 * tp) / (2 * tp + fp + fn + 1e-8)
+            dice_scores.append(dice)
+
+            # IoU (交并比)
+            iou = tp / (tp + fp + fn + 1e-8)
+            iou_scores.append(iou)
+
+            # 精确率
+            precision = tp / (tp + fp + 1e-8)
+            precision_scores.append(precision)
+
+            # 召回率
+            recall = tp / (tp + fn + 1e-8)
+            recall_scores.append(recall)
+
+            # F1分数
+            f1 = 2 * precision * recall / (precision + recall + 1e-8)
+            f1_scores.append(f1)
+
+        # 计算平均指标
+        metrics['dice'] = np.mean(dice_scores)
+        metrics['iou'] = np.mean(iou_scores)
+        metrics['precision'] = np.mean(precision_scores)
+        metrics['recall'] = np.mean(recall_scores)
+        metrics['f1'] = np.mean(f1_scores)
+
+        # 计算像素准确率
+        pred_flat = pred_binary.flatten()
+        target_flat = target_np.flatten()
+        pixel_accuracy = np.mean(pred_flat == target_flat)
+        metrics['pixel_accuracy'] = pixel_accuracy
+
+        return metrics
+
+    def evaluate(self, data_dir: str, split: str = 'test', batch_size: int = 32,
+                 num_workers: int = 4, output_dir: str = None) -> Dict[str, float]:
+        """
+        评估模型性能
+
+        Args:
+            data_dir: 数据集目录
+            split: 数据集划分
+            batch_size: 批次大小
+            num_workers: 数据加载线程数
+            output_dir: 输出目录
+
+        Returns:
+            评估指标字典
+        """
+        print(f"开始评估模型，数据集: {data_dir}, 划分: {split}")
+
+        # 创建数据集
+        dataset = SegmentationDataset(
+            data_dir=data_dir,
+            split=split,
+            resize=256,
+            weights_path=self.weights_path
+        )
+
+        # 创建数据加载器
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True
+        )
+
+        # 评估模型
+        all_predictions = []
+        all_targets = []
+        all_images = []
+
+        with torch.no_grad():
+            for batch_idx, (images, masks) in enumerate(dataloader):
+                images = images.to(self.device)
+                masks = masks.to(self.device)
+
+                # 前向传播
+                outputs = self.model(images)
+
+                # 收集结果
+                all_predictions.append(outputs.cpu())
+                all_targets.append(masks.cpu())
+                all_images.append(images.cpu())
+
+                if batch_idx % 10 == 0:
+                    print(f"评估进度: {batch_idx+1}/{len(dataloader)}")
+
+        # 合并所有批次
+        all_predictions = torch.cat(all_predictions, dim=0)
+        all_targets = torch.cat(all_targets, dim=0)
+        all_images = torch.cat(all_images, dim=0)
+
+        # 计算指标
+        self.metrics = self._compute_metrics(all_predictions, all_targets)
+
+        # 保存结果
+        if output_dir:
+            self._save_evaluation_results(output_dir, all_predictions, all_targets, all_images)
+
+        # 打印结果
+        self._print_metrics()
+
+        return self.metrics
+
+    def _save_evaluation_results(self, output_dir: str, predictions: torch.Tensor,
+                               targets: torch.Tensor, images: torch.Tensor):
+        """保存评估结果"""
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # 保存指标
+        metrics_path = output_path / 'metrics.json'
+        with open(metrics_path, 'w') as f:
+            json.dump(self.metrics, f, indent=2)
+
+        # 保存可视化结果
+        self._save_visualizations(output_path, predictions, targets, images)
+
+        # 保存混淆矩阵
+        self._save_confusion_matrix(output_path, predictions, targets)
+
+        print(f"评估结果已保存到: {output_path}")
+
+    def _save_visualizations(self, output_path: Path, predictions: torch.Tensor,
+                           targets: torch.Tensor, images: torch.Tensor):
+        """保存可视化结果"""
+        viz_dir = output_path / 'visualizations'
+        viz_dir.mkdir(exist_ok=True)
+
+        # 选择前10个样本进行可视化
+        num_samples = min(10, predictions.shape[0])
+
+        for i in range(num_samples):
+            fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+
+            # 原始图像
+            img = images[i].permute(1, 2, 0).numpy()
+            img = (img * [0.229, 0.224, 0.225] + [0.485, 0.456, 0.406]) * 255
+            img = img.astype(np.uint8)
+            axes[0].imshow(img)
+            axes[0].set_title('Original Image')
+            axes[0].axis('off')
+
+            # 真实mask
+            target_mask = targets[i, 0].numpy()
+            axes[1].imshow(target_mask, cmap='gray')
+            axes[1].set_title('Ground Truth')
+            axes[1].axis('off')
+
+            # 预测mask
+            pred_mask = torch.sigmoid(predictions[i, 0]).numpy()
+            axes[2].imshow(pred_mask, cmap='gray')
+            axes[2].set_title('Prediction')
+            axes[2].axis('off')
+
+            # 二值化预测
+            pred_binary = (pred_mask > 0.5).astype(np.float32)
+            axes[3].imshow(pred_binary, cmap='gray')
+            axes[3].set_title('Binary Prediction')
+            axes[3].axis('off')
+
+            plt.tight_layout()
+            plt.savefig(viz_dir / f'sample_{i:03d}.png', dpi=150, bbox_inches='tight')
+            plt.close()
+
+    def _save_confusion_matrix(self, output_path: Path, predictions: torch.Tensor,
+                             targets: torch.Tensor):
+        """保存混淆矩阵"""
+        # 转换为numpy数组
+        pred_np = torch.sigmoid(predictions).cpu().numpy()
+        target_np = targets.cpu().numpy()
+
+        # 二值化预测结果
+        pred_binary = (pred_np > 0.5).astype(np.float32)
+
+        # 计算混淆矩阵
+        pred_flat = pred_binary.flatten()
+        target_flat = target_np.flatten()
+
+        cm = confusion_matrix(target_flat, pred_flat, labels=[0, 1])
+
+        # 绘制混淆矩阵
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                   xticklabels=['Background', 'Face'],
+                   yticklabels=['Background', 'Face'])
+        plt.title('Confusion Matrix')
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        plt.tight_layout()
+        plt.savefig(output_path / 'confusion_matrix.png', dpi=150, bbox_inches='tight')
+        plt.close()
+
+    def _print_metrics(self):
+        """打印评估指标"""
+        print("\n" + "="*50)
+        print("分割评估结果")
+        print("="*50)
+        print(f"Dice系数: {self.metrics['dice']:.4f}")
+        print(f"IoU: {self.metrics['iou']:.4f}")
+        print(f"精确率: {self.metrics['precision']:.4f}")
+        print(f"召回率: {self.metrics['recall']:.4f}")
+        print(f"F1分数: {self.metrics['f1']:.4f}")
+        print(f"像素准确率: {self.metrics['pixel_accuracy']:.4f}")
+        print("="*50)
+
+    def predict_single_image(self, image_path: str, output_path: str = None) -> Dict[str, np.ndarray]:
+        """
+        对单张图像进行预测
+
+        Args:
+            image_path: 输入图像路径
+            output_path: 输出路径
+
+        Returns:
+            预测结果字典
+        """
+        # 读取图像
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"无法读取图像: {image_path}")
+
+        # 预处理
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_pil = Image.fromarray(image_rgb)
+
+        # 图像变换
+        transform = v2.Compose([
+            v2.ToImage(),
+            v2.Resize((256, 256), antialias=True),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+        ])
+
+        image_tensor = transform(image_pil).unsqueeze(0).to(self.device)
+
+        # 预测
+        with torch.no_grad():
+            output = self.model(image_tensor)
+
+        # 后处理
+        pred_mask = torch.sigmoid(output).cpu().numpy()[0, 0]
+        pred_binary = (pred_mask > 0.5).astype(np.uint8)
+
+        # 调整到原始尺寸
+        original_size = image.shape[:2]
+        pred_mask_resized = cv2.resize(pred_mask, (original_size[1], original_size[0]))
+        pred_binary_resized = cv2.resize(pred_binary, (original_size[1], original_size[0]))
+
+        result = {
+            'probability_mask': pred_mask_resized,
+            'binary_mask': pred_binary_resized,
+            'original_image': image
+        }
+
+        # 保存结果
+        if output_path:
+            self._save_prediction_result(result, output_path)
+
+        return result
+
+    def _save_prediction_result(self, result: Dict[str, np.ndarray], output_path: str):
+        """保存预测结果"""
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 创建可视化
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+        # 原始图像
+        axes[0].imshow(cv2.cvtColor(result['original_image'], cv2.COLOR_BGR2RGB))
+        axes[0].set_title('Original Image')
+        axes[0].axis('off')
+
+        # 概率mask
+        axes[1].imshow(result['probability_mask'], cmap='jet', vmin=0, vmax=1)
+        axes[1].set_title('Probability Mask')
+        axes[1].axis('off')
+
+        # 二值mask
+        axes[2].imshow(result['binary_mask'], cmap='gray')
+        axes[2].set_title('Binary Mask')
+        axes[2].axis('off')
+
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+
+    def get_metrics(self) -> Dict[str, float]:
+        """获取评估指标"""
+        return self.metrics
+
+    def get_model_info(self) -> Dict[str, any]:
+        """获取模型信息"""
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+
+        return {
+            'model_type': self.model.model_type,
+            'total_params': total_params,
+            'trainable_params': trainable_params,
+            'feature_dim': self.model.get_feature_dim(),
+            'patch_size': self.model.get_patch_size(),
+        }
